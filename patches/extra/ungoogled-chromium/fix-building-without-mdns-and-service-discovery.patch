@@ -3,7 +3,7 @@
 --- a/chrome/browser/media/router/discovery/mdns/dns_sd_device_lister.cc
 +++ b/chrome/browser/media/router/discovery/mdns/dns_sd_device_lister.cc
 @@ -40,37 +40,22 @@ DnsSdDeviceLister::DnsSdDeviceLister(
- DnsSdDeviceLister::~DnsSdDeviceLister() {}
+ DnsSdDeviceLister::~DnsSdDeviceLister() = default;
  
  void DnsSdDeviceLister::Discover() {
 -#if BUILDFLAG(ENABLE_SERVICE_DISCOVERY)
@@ -39,4 +39,4 @@
 -  device_lister_->DiscoverNewDevices();
  }
  
- }  // namespace media_router
+ void DnsSdDeviceLister::OnPermissionRejected() {

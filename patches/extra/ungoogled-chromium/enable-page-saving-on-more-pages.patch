@@ -2,20 +2,20 @@
 
 --- a/chrome/browser/ui/browser_commands.cc
 +++ b/chrome/browser/ui/browser_commands.cc
-@@ -443,11 +443,6 @@ int GetContentRestrictions(const Browser
+@@ -566,11 +566,6 @@ int GetContentRestrictions(const Browser
      CoreTabHelper* core_tab_helper =
          CoreTabHelper::FromWebContents(current_tab);
      content_restrictions = core_tab_helper->content_restrictions();
 -    NavigationEntry* last_committed_entry =
 -        current_tab->GetController().GetLastCommittedEntry();
--    if (!content::IsSavableURL(
--            last_committed_entry ? last_committed_entry->GetURL() : GURL()))
+-    if (!content::IsSavableURL(last_committed_entry->GetURL())) {
 -      content_restrictions |= CONTENT_RESTRICTION_SAVE;
+-    }
    }
    return content_restrictions;
  }
-@@ -1371,8 +1366,7 @@ bool CanSavePage(const Browser* browser)
-       DownloadPrefs::DownloadRestriction::ALL_FILES) {
+@@ -1748,8 +1743,7 @@ bool CanSavePage(const Browser* browser)
+       policy::DownloadRestriction::ALL_FILES) {
      return false;
    }
 -  return !browser->is_type_devtools() &&
@@ -26,7 +26,7 @@
  void Print(Browser* browser) {
 --- a/components/offline_pages/core/offline_page_model.cc
 +++ b/components/offline_pages/core/offline_page_model.cc
-@@ -22,7 +22,7 @@ OfflinePageModel::SavePageParams::~SaveP
+@@ -21,7 +21,7 @@ OfflinePageModel::SavePageParams::~SaveP
  
  // static
  bool OfflinePageModel::CanSaveURL(const GURL& url) {
@@ -37,7 +37,7 @@
  OfflinePageModel::OfflinePageModel() = default;
 --- a/content/common/url_schemes.cc
 +++ b/content/common/url_schemes.cc
-@@ -23,13 +23,22 @@ namespace {
+@@ -24,13 +24,21 @@ namespace {
  bool g_registered_url_schemes = false;
  
  const char* const kDefaultSavableSchemes[] = {
@@ -56,14 +56,13 @@
 +  url::kMailToScheme,
 +  url::kWsScheme,
 +  url::kWssScheme,
-+  kGuestScheme,
 +  kViewSourceScheme
  };
  
  // These lists are lazily initialized below and are leaked on shutdown to
 --- a/content/public/common/url_utils.cc
 +++ b/content/public/common/url_utils.cc
-@@ -27,11 +27,7 @@ bool HasWebUIScheme(const GURL& url) {
+@@ -40,11 +40,7 @@ bool IsPdfInternalPluginAllowedOrigin(co
  }
  
  bool IsSavableURL(const GURL& url) {

@@ -3,9 +3,9 @@
 
 --- a/chrome/browser/resources/settings/search_engines_page/search_engine_edit_dialog.html
 +++ b/chrome/browser/resources/settings/search_engines_page/search_engine_edit_dialog.html
-@@ -20,6 +20,13 @@
-             value="{{queryUrl_}}" on-focus="validate_" on-input="validate_"
-             disabled$="[[model.urlLocked]]">
+@@ -22,6 +22,13 @@
+             error-message="$i18n{notValid}"
+             value="{{queryUrl_}}" on-focus="validate_" on-input="validate_">
          </cr-input>
 +        <cr-input id="suggestionsUrl"
 +            label="Suggestions URL with %s in place of query"
@@ -16,10 +16,10 @@
 +        </cr-input>
        </div>
        <div slot="button-container">
-         <cr-button class="cancel-button" on-click="cancel_" id="cancel">
+         <cr-button class="cancel-button" on-click="cancel_" id="cancel"
 --- a/chrome/browser/resources/settings/search_engines_page/search_engine_edit_dialog.ts
 +++ b/chrome/browser/resources/settings/search_engines_page/search_engine_edit_dialog.ts
-@@ -28,6 +28,7 @@ export interface SettingsSearchEngineEdi
+@@ -36,6 +36,7 @@ export interface SettingsSearchEngineEdi
      dialog: CrDialogElement,
      keyword: CrInputElement,
      queryUrl: CrInputElement,
@@ -27,31 +27,31 @@
      searchEngine: CrInputElement,
    };
  }
-@@ -56,6 +57,7 @@ export class SettingsSearchEngineEditDia
+@@ -64,6 +65,7 @@ export class SettingsSearchEngineEditDia
        searchEngine_: String,
        keyword_: String,
        queryUrl_: String,
 +      suggestionsUrl_: String,
        dialogTitle_: String,
-       keywordFieldLabel_: String,
        actionButtonText_: String,
-@@ -72,6 +74,7 @@ export class SettingsSearchEngineEditDia
+       cancelButtonHidden_: Boolean,
+@@ -79,6 +81,7 @@ export class SettingsSearchEngineEditDia
    private searchEngine_: string;
    private keyword_: string;
    private queryUrl_: string;
 +  private suggestionsUrl_: string;
    private dialogTitle_: string;
-   private keywordFieldLabel_: string;
    private actionButtonText_: string;
-@@ -103,6 +106,7 @@ export class SettingsSearchEngineEditDia
-       this.searchEngine_ = this.model.name;
+   private cancelButtonHidden_: boolean;
+@@ -109,6 +112,7 @@ export class SettingsSearchEngineEditDia
        this.keyword_ = this.model.keyword;
        this.queryUrl_ = this.model.url;
+       this.readonly_ = this.model.isManaged;
 +      this.suggestionsUrl_ = this.model.suggestionsUrl;
      } else {
-       this.dialogTitle_ =
-           loadTimeData.getString('searchEnginesAddSearchEngine');
-@@ -142,8 +146,12 @@ export class SettingsSearchEngineEditDia
+       this.dialogTitle_ = loadTimeData.getString('searchEnginesAddSiteSearch');
+       this.actionButtonText_ = loadTimeData.getString('add');
+@@ -144,8 +148,12 @@ export class SettingsSearchEngineEditDia
        }
      }
  
@@ -66,9 +66,9 @@
    }
  
    private cancel_() {
-@@ -152,7 +160,8 @@ export class SettingsSearchEngineEditDia
+@@ -154,7 +162,8 @@ export class SettingsSearchEngineEditDia
  
-   private onActionButtonTap_() {
+   private onActionButtonClick_() {
      this.browserProxy_.searchEngineEditCompleted(
 -        this.searchEngine_, this.keyword_, this.queryUrl_);
 +        this.searchEngine_, this.keyword_, this.queryUrl_,
@@ -76,13 +76,11 @@
      this.$.dialog.close();
    }
  
-@@ -180,9 +189,11 @@ export class SettingsSearchEngineEditDia
- 
-   private updateActionButtonState_() {
-     const allValid = [
--      this.$.searchEngine, this.$.keyword, this.$.queryUrl
-+      this.$.searchEngine, this.$.keyword, this.$.queryUrl,
-+      this.$.suggestionsUrl
+@@ -192,8 +201,10 @@ export class SettingsSearchEngineEditDia
+       this.$.searchEngine,
+       this.$.keyword,
+       this.$.queryUrl,
++      this.$.suggestionsUrl,
      ].every(function(inputElement) {
 -      return !inputElement.invalid && inputElement.value.length > 0;
 +      return !inputElement.invalid && (inputElement.value.length > 0 ||
@@ -92,15 +90,15 @@
    }
 --- a/chrome/browser/resources/settings/search_engines_page/search_engines_browser_proxy.ts
 +++ b/chrome/browser/resources/settings/search_engines_page/search_engines_browser_proxy.ts
-@@ -31,6 +31,7 @@ export type SearchEngine = {
-   name: string,
-   shouldConfirmDeletion: boolean,
-   url: string,
-+  suggestionsUrl: string,
-   urlLocked: boolean,
- };
+@@ -35,6 +35,7 @@ export interface SearchEngine {
+   name: string;
+   shouldConfirmDeletion: boolean;
+   url: string;
++  suggestionsUrl: string;
+   urlLocked: boolean;
+ }
  
-@@ -73,7 +74,7 @@ export interface SearchEnginesBrowserPro
+@@ -100,7 +101,7 @@ export interface SearchEnginesBrowserPro
    searchEngineEditCancelled(): void;
  
    searchEngineEditCompleted(
@@ -109,7 +107,7 @@
  
    getSearchEnginesList(): Promise<SearchEnginesInfo>;
  
-@@ -114,11 +115,12 @@ export class SearchEnginesBrowserProxyIm
+@@ -147,11 +148,12 @@ export class SearchEnginesBrowserProxyIm
    }
  
    searchEngineEditCompleted(
@@ -125,7 +123,7 @@
  
 --- a/chrome/browser/ui/search_engines/edit_search_engine_controller.cc
 +++ b/chrome/browser/ui/search_engines/edit_search_engine_controller.cc
-@@ -67,6 +67,15 @@ bool EditSearchEngineController::IsURLVa
+@@ -69,6 +69,15 @@ bool EditSearchEngineController::IsURLVa
        .is_valid();
  }
  
@@ -141,7 +139,7 @@
  bool EditSearchEngineController::IsKeywordValid(
      const std::u16string& keyword_input) const {
    std::u16string keyword_input_trimmed(
-@@ -89,10 +98,12 @@ bool EditSearchEngineController::IsKeywo
+@@ -93,10 +102,12 @@ bool EditSearchEngineController::IsKeywo
  void EditSearchEngineController::AcceptAddOrEdit(
      const std::u16string& title_input,
      const std::u16string& keyword_input,
@@ -155,7 +153,7 @@
  
    TemplateURLService* template_url_service =
        TemplateURLServiceFactory::GetForProfile(profile_);
-@@ -120,7 +131,8 @@ void EditSearchEngineController::AcceptA
+@@ -124,7 +135,8 @@ void EditSearchEngineController::AcceptA
    } else {
      // Adding or modifying an entry via the Delegate.
      edit_keyword_delegate_->OnEditedKeyword(template_url_, title_input,
@@ -176,7 +174,7 @@
 +                               const std::string& suggestions_url) = 0;
  
   protected:
-   virtual ~EditSearchEngineControllerDelegate() {}
+   virtual ~EditSearchEngineControllerDelegate() = default;
 @@ -54,6 +55,8 @@ class EditSearchEngineController {
    // character results in a valid url.
    bool IsURLValid(const std::string& url_input) const;
@@ -198,9 +196,9 @@
    // already owned by the TemplateURLService.
 --- a/chrome/browser/ui/search_engines/keyword_editor_controller.cc
 +++ b/chrome/browser/ui/search_engines/keyword_editor_controller.cc
-@@ -21,23 +21,27 @@ KeywordEditorController::KeywordEditorCo
- KeywordEditorController::~KeywordEditorController() {
- }
+@@ -23,23 +23,27 @@ KeywordEditorController::KeywordEditorCo
+ 
+ KeywordEditorController::~KeywordEditorController() = default;
  
 -int KeywordEditorController::AddTemplateURL(const std::u16string& title,
 -                                            const std::u16string& keyword,
@@ -232,26 +230,27 @@
 +    const std::string& url,
 +    const std::string& suggestions_url) {
    DCHECK(!url.empty());
-   const int index = table_model_->IndexOfTemplateURL(template_url);
-   if (index == -1) {
-@@ -48,10 +52,12 @@ void KeywordEditorController::ModifyTemp
+   const std::optional<size_t> index =
+       table_model_->IndexOfTemplateURL(template_url);
+@@ -51,11 +55,13 @@ void KeywordEditorController::ModifyTemp
  
    // Don't do anything if the entry didn't change.
    if ((template_url->short_name() == title) &&
--      (template_url->keyword() == keyword) && (template_url->url() == url))
+-      (template_url->keyword() == keyword) && (template_url->url() == url)) {
 +      (template_url->keyword() == keyword) &&
 +      (template_url->url() == url) &&
-+      (template_url->suggestions_url() == suggestions_url))
++      (template_url->suggestions_url() == suggestions_url)) {
      return;
+   }
  
--  table_model_->ModifyTemplateURL(index, title, keyword, url);
-+  table_model_->ModifyTemplateURL(index, title, keyword, url, suggestions_url);
+-  table_model_->ModifyTemplateURL(index.value(), title, keyword, url);
++  table_model_->ModifyTemplateURL(index.value(), title, keyword, url, suggestions_url);
  
    base::RecordAction(UserMetricsAction("KeywordEditor_ModifiedKeyword"));
  }
 --- a/chrome/browser/ui/search_engines/keyword_editor_controller.h
 +++ b/chrome/browser/ui/search_engines/keyword_editor_controller.h
-@@ -29,14 +29,16 @@ class KeywordEditorController {
+@@ -33,14 +33,16 @@ class KeywordEditorController {
    // model.  Returns the index of the added URL.
    int AddTemplateURL(const std::u16string& title,
                       const std::u16string& keyword,
@@ -272,14 +271,14 @@
    bool CanEdit(const TemplateURL* url) const;
 --- a/chrome/browser/ui/search_engines/template_url_table_model.cc
 +++ b/chrome/browser/ui/search_engines/template_url_table_model.cc
-@@ -108,21 +108,25 @@ void TemplateURLTableModel::Remove(int i
- void TemplateURLTableModel::Add(int index,
+@@ -201,21 +201,25 @@ void TemplateURLTableModel::Remove(size_
+ void TemplateURLTableModel::Add(size_t index,
                                  const std::u16string& short_name,
                                  const std::u16string& keyword,
 -                                const std::string& url) {
 +                                const std::string& url,
 +                                const std::string& suggestions_url) {
-   DCHECK(index >= 0 && index <= RowCount());
+   DCHECK(index <= RowCount());
    DCHECK(!url.empty());
    TemplateURLData data;
    data.SetShortName(short_name);
@@ -290,20 +289,20 @@
    template_url_service_->Add(std::make_unique<TemplateURL>(data));
  }
  
--void TemplateURLTableModel::ModifyTemplateURL(int index,
+-void TemplateURLTableModel::ModifyTemplateURL(size_t index,
 -                                              const std::u16string& title,
 -                                              const std::u16string& keyword,
 -                                              const std::string& url) {
 +void TemplateURLTableModel::ModifyTemplateURL(
-+    int index,
++    size_t index,
 +    const std::u16string& title,
 +    const std::u16string& keyword,
 +    const std::string& url,
 +    const std::string& suggestions_url) {
-   DCHECK(index >= 0 && index <= RowCount());
+   DCHECK(index <= RowCount());
    DCHECK(!url.empty());
    TemplateURL* template_url = GetTemplateURL(index);
-@@ -131,7 +135,8 @@ void TemplateURLTableModel::ModifyTempla
+@@ -224,7 +228,8 @@ void TemplateURLTableModel::ModifyTempla
    DCHECK(template_url_service_->GetDefaultSearchProvider() != template_url ||
           template_url->SupportsReplacement(
               template_url_service_->search_terms_data()));
@@ -312,11 +311,11 @@
 +                                          suggestions_url);
  }
  
- TemplateURL* TemplateURLTableModel::GetTemplateURL(int index) {
+ TemplateURL* TemplateURLTableModel::GetTemplateURL(size_t index) {
 --- a/chrome/browser/ui/search_engines/template_url_table_model.h
 +++ b/chrome/browser/ui/search_engines/template_url_table_model.h
-@@ -53,13 +53,15 @@ class TemplateURLTableModel : public ui:
-   void Add(int index,
+@@ -61,13 +61,15 @@ class TemplateURLTableModel : public ui:
+   void Add(size_t index,
             const std::u16string& short_name,
             const std::u16string& keyword,
 -           const std::string& url);
@@ -324,7 +323,7 @@
 +           const std::string& suggestions_url);
  
    // Update the entry at the specified index.
-   void ModifyTemplateURL(int index,
+   void ModifyTemplateURL(size_t index,
                           const std::u16string& title,
                           const std::u16string& keyword,
 -                         const std::string& url);
@@ -332,10 +331,10 @@
 +                         const std::string& suggestions_url);
  
    // Reloads the icon at the specified index.
-   void ReloadIcon(int index);
+   void ReloadIcon(size_t index);
 --- a/chrome/browser/ui/webui/settings/search_engines_handler.cc
 +++ b/chrome/browser/ui/webui/settings/search_engines_handler.cc
-@@ -37,6 +37,7 @@ namespace {
+@@ -48,6 +48,7 @@ namespace {
  const char kSearchEngineField[] = "searchEngine";
  const char kKeywordField[] = "keyword";
  const char kQueryUrlField[] = "queryUrl";
@@ -343,17 +342,16 @@
  
  // Dummy number used for indicating that a new search engine is added.
  const int kNewSearchEngineIndex = -1;
-@@ -212,6 +213,9 @@ SearchEnginesHandler::CreateDictionaryFo
+@@ -226,6 +227,8 @@ base::Value::Dict SearchEnginesHandler::
    Profile* profile = Profile::FromWebUI(web_ui());
-   dict->SetStringKey(
-       "url", template_url->url_ref().DisplayURL(UIThreadSearchTermsData()));
-+  dict->SetStringKey("suggestionsUrl",
-+                  template_url->suggestions_url_ref().DisplayURL(
-+                      UIThreadSearchTermsData()));
-   dict->SetBoolKey("urlLocked", template_url->prepopulate_id() > 0);
+   dict.Set("url",
+            template_url->url_ref().DisplayURL(UIThreadSearchTermsData()));
++  dict.Set("suggestionsUrl", template_url->suggestions_url_ref().DisplayURL(
++           UIThreadSearchTermsData()));
+   dict.Set("urlLocked", ((template_url->prepopulate_id() > 0) ||
+                          (template_url->starter_pack_id() > 0)));
    GURL icon_url = template_url->favicon_url();
-   if (icon_url.is_valid())
-@@ -325,12 +329,14 @@ void SearchEnginesHandler::HandleSearchE
+@@ -401,12 +404,14 @@ void SearchEnginesHandler::HandleSearchE
  void SearchEnginesHandler::OnEditedKeyword(TemplateURL* template_url,
                                             const std::u16string& title,
                                             const std::u16string& keyword,
@@ -361,26 +359,31 @@
 +                                           const std::string& url,
 +                                           const std::string& suggestions_url) {
    DCHECK(!url.empty());
-   if (template_url)
+   if (template_url) {
 -    list_controller_.ModifyTemplateURL(template_url, title, keyword, url);
 +    list_controller_.ModifyTemplateURL(template_url, title, keyword, url,
 +                                       suggestions_url);
-   else
+   } else {
 -    list_controller_.AddTemplateURL(title, keyword, url);
 +    list_controller_.AddTemplateURL(title, keyword, url, suggestions_url);
+   }
  
    edit_controller_.reset();
- }
-@@ -358,6 +364,8 @@ bool SearchEnginesHandler::CheckFieldVal
+@@ -436,6 +441,8 @@ bool SearchEnginesHandler::CheckFieldVal
      is_valid = edit_controller_->IsKeywordValid(base::UTF8ToUTF16(field_value));
-   else if (field_name.compare(kQueryUrlField) == 0)
+   } else if (field_name.compare(kQueryUrlField) == 0) {
      is_valid = edit_controller_->IsURLValid(field_value);
-+  else if (field_name.compare(kSuggestionsUrlField) == 0)
++  } else if (field_name.compare(kSuggestionsUrlField) == 0) {
 +    is_valid = edit_controller_->IsSuggestionsURLValid(field_value);
-   else
+   } else {
      NOTREACHED();
+   }
+@@ -458,18 +465,21 @@ void SearchEnginesHandler::HandleSearchE
+     return;
+   }
  
-@@ -379,14 +387,17 @@ void SearchEnginesHandler::HandleSearchE
+-  CHECK_EQ(3U, args.size());
++  CHECK_EQ(4U, args.size());
    const std::string& search_engine = args[0].GetString();
    const std::string& keyword = args[1].GetString();
    const std::string& query_url = args[2].GetString();
@@ -402,7 +405,7 @@
  
 --- a/chrome/browser/ui/webui/settings/search_engines_handler.h
 +++ b/chrome/browser/ui/webui/settings/search_engines_handler.h
-@@ -45,7 +45,8 @@ class SearchEnginesHandler : public Sett
+@@ -41,7 +41,8 @@ class SearchEnginesHandler : public Sett
    void OnEditedKeyword(TemplateURL* template_url,
                         const std::u16string& title,
                         const std::u16string& keyword,
@@ -412,9 +415,9 @@
  
    // SettingsPageUIHandler implementation.
    void RegisterMessages() override;
-@@ -77,8 +78,8 @@ class SearchEnginesHandler : public Sett
+@@ -80,8 +81,8 @@ class SearchEnginesHandler : public Sett
    // to WebUI. Called from WebUI.
-   void HandleValidateSearchEngineInput(base::Value::ConstListView args);
+   void HandleValidateSearchEngineInput(const base::Value::List& args);
  
 -  // Checks whether the given user input field (searchEngine, keyword, queryUrl)
 -  // is populated with a valid value.
@@ -425,7 +428,7 @@
  
 --- a/components/search_engines/template_url_service.cc
 +++ b/components/search_engines/template_url_service.cc
-@@ -643,7 +643,8 @@ void TemplateURLService::IncrementUsageC
+@@ -892,7 +892,8 @@ void TemplateURLService::IncrementUsageC
  void TemplateURLService::ResetTemplateURL(TemplateURL* url,
                                            const std::u16string& title,
                                            const std::u16string& keyword,
@@ -435,7 +438,7 @@
    DCHECK(!IsCreatedByExtension(url));
    DCHECK(!keyword.empty());
    DCHECK(!search_url.empty());
-@@ -658,6 +659,7 @@ void TemplateURLService::ResetTemplateUR
+@@ -907,6 +908,7 @@ void TemplateURLService::ResetTemplateUR
    data.safe_for_autoreplace = false;
    data.last_modified = clock_->Now();
    data.is_active = TemplateURLData::ActiveStatus::kTrue;
@@ -445,7 +448,7 @@
  }
 --- a/components/search_engines/template_url_service.h
 +++ b/components/search_engines/template_url_service.h
-@@ -253,7 +253,8 @@ class TemplateURLService : public WebDat
+@@ -324,7 +324,8 @@ class TemplateURLService final : public
    void ResetTemplateURL(TemplateURL* url,
                          const std::u16string& title,
                          const std::u16string& keyword,

@@ -201,19 +201,19 @@ def apply_substitution(regex_path, files_path, source_tree, domainsub_cache):
         raise FileNotFoundError(regex_path)
     if not files_path.exists():
         raise FileNotFoundError(files_path)
-    if domainsub_cache.exists():
+    if domainsub_cache and domainsub_cache.exists():
         raise FileExistsError(domainsub_cache)
     resolved_tree = source_tree.resolve()
     regex_pairs = DomainRegexList(regex_path).regex_pairs
     fileindex_content = io.BytesIO()
-    with tarfile.open(
-            str(domainsub_cache), 'w:%s' % domainsub_cache.suffix[1:],
-            compresslevel=1) as cache_tar:
+    with tarfile.open(str(domainsub_cache), 'w:%s' % domainsub_cache.suffix[1:],
+                      compresslevel=1) if domainsub_cache else open(os.devnull, 'w') as cache_tar:
         for relative_path in filter(len, files_path.read_text().splitlines()):
             if _INDEX_HASH_DELIMITER in relative_path:
-                # Cache tar will be incomplete; remove it for convenience
-                cache_tar.close()
-                domainsub_cache.unlink()
+                if domainsub_cache:
+                    # Cache tar will be incomplete; remove it for convenience
+                    cache_tar.close()
+                    domainsub_cache.unlink()
                 raise ValueError(
                     'Path "%s" contains the file index hash delimiter "%s"' % relative_path,
                     _INDEX_HASH_DELIMITER)
@@ -229,16 +229,18 @@ def apply_substitution(regex_path, files_path, source_tree, domainsub_cache):
             if crc32_hash is None:
                 get_logger().info('Path has no substitutions: %s', relative_path)
                 continue
-            fileindex_content.write('{}{}{:08x}\n'.format(relative_path, _INDEX_HASH_DELIMITER,
-                                                          crc32_hash).encode(ENCODING))
-            orig_tarinfo = tarfile.TarInfo(str(Path(_ORIG_DIR) / relative_path))
-            orig_tarinfo.size = len(orig_content)
-            with io.BytesIO(orig_content) as orig_file:
-                cache_tar.addfile(orig_tarinfo, orig_file)
-        fileindex_tarinfo = tarfile.TarInfo(_INDEX_LIST)
-        fileindex_tarinfo.size = fileindex_content.tell()
-        fileindex_content.seek(0)
-        cache_tar.addfile(fileindex_tarinfo, fileindex_content)
+            if domainsub_cache:
+                fileindex_content.write('{}{}{:08x}\n'.format(relative_path, _INDEX_HASH_DELIMITER,
+                                                              crc32_hash).encode(ENCODING))
+                orig_tarinfo = tarfile.TarInfo(str(Path(_ORIG_DIR) / relative_path))
+                orig_tarinfo.size = len(orig_content)
+                with io.BytesIO(orig_content) as orig_file:
+                    cache_tar.addfile(orig_tarinfo, orig_file)
+        if domainsub_cache:
+            fileindex_tarinfo = tarfile.TarInfo(_INDEX_LIST)
+            fileindex_tarinfo.size = fileindex_content.tell()
+            fileindex_content.seek(0)
+            cache_tar.addfile(fileindex_tarinfo, fileindex_content)
 
 
 def revert_substitution(domainsub_cache, source_tree):
@@ -268,6 +270,8 @@ def revert_substitution(domainsub_cache, source_tree):
     # * The tar file is well-behaved (e.g. no files extracted outside of destination path)
     # * Cache file index and cache contents are already consistent (i.e. no files exclusive to
     #   one or the other)
+    if not domainsub_cache:
+        get_logger().error('Cache file must be specified.')
     if not domainsub_cache.exists():
         raise FileNotFoundError(domainsub_cache)
     if not source_tree.exists():
@@ -276,11 +280,11 @@ def revert_substitution(domainsub_cache, source_tree):
 
     cache_index_files = set() # All files in the file index
 
-    with tempfile.TemporaryDirectory(
-            prefix='domsubcache_files', dir=str(resolved_tree)) as tmp_extract_name:
+    with tempfile.TemporaryDirectory(prefix='domsubcache_files',
+                                     dir=str(resolved_tree)) as tmp_extract_name:
         extract_path = Path(tmp_extract_name)
         get_logger().debug('Extracting domain substitution cache...')
-        extract_tar_file(domainsub_cache, extract_path, None)
+        extract_tar_file(domainsub_cache, extract_path, None, False, None)
 
         # Validate source tree file hashes match
         get_logger().debug('Validating substituted files in source tree...')
@@ -328,18 +332,24 @@ def main():
         'apply',
         help='Apply domain substitution',
         description='Applies domain substitution and creates the domain substitution cache.')
-    apply_parser.add_argument(
-        '-r', '--regex', type=Path, required=True, help='Path to domain_regex.list')
-    apply_parser.add_argument(
-        '-f', '--files', type=Path, required=True, help='Path to domain_substitution.list')
+    apply_parser.add_argument('-r',
+                              '--regex',
+                              type=Path,
+                              required=True,
+                              help='Path to domain_regex.list')
+    apply_parser.add_argument('-f',
+                              '--files',
+                              type=Path,
+                              required=True,
+                              help='Path to domain_substitution.list')
     apply_parser.add_argument(
         '-c',
         '--cache',
         type=Path,
-        required=True,
         help='The path to the domain substitution cache. The path must not already exist.')
-    apply_parser.add_argument(
-        'directory', type=Path, help='The directory to apply domain substitution')
+    apply_parser.add_argument('directory',
+                              type=Path,
+                              help='The directory to apply domain substitution')
     apply_parser.set_defaults(reverting=False)
 
     # revert
@@ -347,15 +357,15 @@ def main():
         'revert',
         help='Revert domain substitution',
         description='Reverts domain substitution based only on the domain substitution cache.')
-    revert_parser.add_argument(
-        'directory', type=Path, help='The directory to reverse domain substitution')
-    revert_parser.add_argument(
-        '-c',
-        '--cache',
-        type=Path,
-        required=True,
-        help=('The path to the domain substitution cache. '
-              'The path must exist and will be removed if successful.'))
+    revert_parser.add_argument('directory',
+                               type=Path,
+                               help='The directory to reverse domain substitution')
+    revert_parser.add_argument('-c',
+                               '--cache',
+                               type=Path,
+                               required=True,
+                               help=('The path to the domain substitution cache. '
+                                     'The path must exist and will be removed if successful.'))
     revert_parser.set_defaults(reverting=True)
 
     args = parser.parse_args()

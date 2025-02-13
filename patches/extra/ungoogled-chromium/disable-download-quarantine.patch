@@ -2,7 +2,7 @@
 
 --- a/components/download/internal/common/base_file.cc
 +++ b/components/download/internal/common/base_file.cc
-@@ -22,7 +22,6 @@
+@@ -29,7 +29,6 @@
  #include "components/download/public/common/download_interrupt_reasons_utils.h"
  #include "components/download/public/common/download_item.h"
  #include "components/download/public/common/download_stats.h"
@@ -10,7 +10,7 @@
  #include "crypto/secure_hash.h"
  
  #if BUILDFLAG(IS_ANDROID)
-@@ -525,102 +524,6 @@ DownloadInterruptReason BaseFile::Publis
+@@ -535,94 +534,10 @@ DownloadInterruptReason BaseFile::Publis
  }
  #endif  // BUILDFLAG(IS_ANDROID)
  
@@ -54,11 +54,11 @@
 -  return DOWNLOAD_INTERRUPT_REASON_FILE_FAILED;
 -}
 -
--// Given a source and a referrer, determines the "safest" URL that can be used
--// to determine the authority of the download source. Returns an empty URL if no
--// HTTP/S URL can be determined for the <|source_url|, |referrer_url|> pair.
--GURL GetEffectiveAuthorityURL(const GURL& source_url,
--                              const GURL& referrer_url) {
+-}  // namespace
+-
+ // static
+ GURL BaseFile::GetEffectiveAuthorityURL(const GURL& source_url,
+                                         const GURL& referrer_url) {
 -  if (source_url.is_valid()) {
 -    // http{,s} has an authority and are supported.
 -    if (source_url.SchemeIsHTTPOrHTTPS())
@@ -70,7 +70,7 @@
 -    // going to assume that at this point it's okay to treat this download as
 -    // being from the local system.
 -    if (source_url.SchemeIsFile())
--      return source_url;
+       return source_url;
 -
 -    // ftp:// has an authority.
 -    if (source_url.SchemeIs(url::kFtpScheme))
@@ -86,14 +86,8 @@
 -  return GURL();
 -}
 -
--}  // namespace
--
 -void BaseFile::OnFileQuarantined(
--    bool connection_error,
 -    quarantine::mojom::QuarantineFileResult result) {
--  base::UmaHistogramBoolean("Download.QuarantineService.ConnectionError",
--                            connection_error);
--
 -  DCHECK(on_annotation_done_callback_);
 -  quarantine_service_.reset();
 -  std::move(on_annotation_done_callback_)
@@ -103,18 +97,16 @@
 -void BaseFile::OnQuarantineServiceError(const GURL& source_url,
 -                                        const GURL& referrer_url) {
 -#if BUILDFLAG(IS_WIN)
--  OnFileQuarantined(/*connection_error=*/true,
--                    quarantine::SetInternetZoneIdentifierDirectly(
--                        full_path_, source_url, referrer_url));
+-  OnFileQuarantined(quarantine::SetInternetZoneIdentifierDirectly(
+-      full_path_, source_url, referrer_url));
 -#else   // !BUILDFLAG(IS_WIN)
--  CHECK(false) << "In-process quarantine service should not have failed.";
+-  NOTREACHED() << "In-process quarantine service should not have failed.";
 -#endif  // !BUILDFLAG(IS_WIN)
--}
+ }
  
  void BaseFile::AnnotateWithSourceInformation(
-     const std::string& client_guid,
-@@ -628,32 +531,8 @@ void BaseFile::AnnotateWithSourceInforma
-     const GURL& referrer_url,
+@@ -632,32 +547,8 @@ void BaseFile::AnnotateWithSourceInforma
+     const std::optional<url::Origin>& request_initiator,
      mojo::PendingRemote<quarantine::mojom::Quarantine> remote_quarantine,
      OnAnnotationDoneCallback on_annotation_done_callback) {
 -  GURL authority_url = GetEffectiveAuthorityURL(source_url, referrer_url);
@@ -139,9 +131,9 @@
 -        authority_url, referrer_url));
 -
 -    quarantine_service_->QuarantineFile(
--        full_path_, authority_url, referrer_url, client_guid,
--        base::BindOnce(&BaseFile::OnFileQuarantined, weak_factory_.GetWeakPtr(),
--                       false));
+-        full_path_, authority_url, referrer_url, request_initiator, client_guid,
+-        base::BindOnce(&BaseFile::OnFileQuarantined,
+-                       weak_factory_.GetWeakPtr()));
 -  }
 +  std::move(on_annotation_done_callback)
 +      .Run(DOWNLOAD_INTERRUPT_REASON_NONE);
@@ -150,54 +142,56 @@
  }  // namespace download
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
-@@ -82,7 +82,6 @@ source_set("browser") {
-     "//components/permissions:permissions_common",
-     "//components/power_scheduler",
+@@ -118,7 +118,6 @@ source_set("browser") {
+     "//components/payments/mojom",
+     "//components/power_monitor",
      "//components/services/filesystem:lib",
 -    "//components/services/quarantine:quarantine",
      "//components/services/storage",
      "//components/services/storage:filesystem_proxy_factory",
      "//components/services/storage/dom_storage:local_storage_proto",
---- a/content/browser/file_system_access/safe_move_helper.cc
-+++ b/content/browser/file_system_access/safe_move_helper.cc
+--- a/content/browser/file_system_access/file_system_access_safe_move_helper.cc
++++ b/content/browser/file_system_access/file_system_access_safe_move_helper.cc
 @@ -13,7 +13,6 @@
- #include "base/threading/sequenced_task_runner_handle.h"
+ #include "base/task/thread_pool.h"
+ #include "base/thread_annotations.h"
  #include "build/build_config.h"
- #include "build/chromeos_buildflags.h"
 -#include "components/services/quarantine/quarantine.h"
+ #include "content/browser/file_system_access/features.h"
  #include "content/browser/file_system_access/file_system_access_error.h"
  #include "content/public/browser/content_browser_client.h"
- #include "content/public/common/content_client.h"
-@@ -194,20 +193,8 @@ void SafeMoveHelper::DidAfterWriteCheck(
+@@ -229,22 +228,9 @@ void FileSystemAccessSafeMoveHelper::Did
    // not exist anymore. In case of error, the source file URL will point to a
    // valid filesystem location.
    base::OnceCallback<void(base::File::Error)> result_callback;
--  if (RequireSecurityChecks()) {
+-  if (RequireQuarantine()) {
 -    GURL referrer_url = manager_->is_off_the_record() ? GURL() : context_.url;
 -    mojo::Remote<quarantine::mojom::Quarantine> quarantine_remote;
 -    if (quarantine_connection_callback_) {
 -      quarantine_connection_callback_.Run(
 -          quarantine_remote.BindNewPipeAndPassReceiver());
 -    }
--    result_callback = base::BindOnce(
--        &SafeMoveHelper::DidFileDoQuarantine, weak_factory_.GetWeakPtr(),
--        dest_url(), referrer_url, std::move(quarantine_remote));
+-    result_callback =
+-        base::BindOnce(&FileSystemAccessSafeMoveHelper::DidFileDoQuarantine,
+-                       weak_factory_.GetWeakPtr(), dest_url(), referrer_url,
+-                       std::move(quarantine_remote));
 -  } else {
-     result_callback = base::BindOnce(&SafeMoveHelper::DidFileSkipQuarantine,
-                                      weak_factory_.GetWeakPtr());
+     result_callback =
+         base::BindOnce(&FileSystemAccessSafeMoveHelper::DidFileSkipQuarantine,
+                        weak_factory_.GetWeakPtr());
 -  }
    manager_->DoFileSystemOperation(
        FROM_HERE, &storage::FileSystemOperationRunner::Move,
        std::move(result_callback), source_url(), dest_url(), options_,
-@@ -223,7 +210,6 @@ void SafeMoveHelper::DidFileSkipQuaranti
- void SafeMoveHelper::DidFileDoQuarantine(
+@@ -261,7 +247,6 @@ void FileSystemAccessSafeMoveHelper::Did
+ void FileSystemAccessSafeMoveHelper::DidFileDoQuarantine(
      const storage::FileSystemURL& target_url,
      const GURL& referrer_url,
 -    mojo::Remote<quarantine::mojom::Quarantine> quarantine_remote,
      base::File::Error result) {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
-@@ -254,37 +240,9 @@ void SafeMoveHelper::DidFileDoQuarantine
+@@ -292,40 +277,9 @@ void FileSystemAccessSafeMoveHelper::Did
        referrer_url.is_valid() && referrer_url.SchemeIsHTTPOrHTTPS()
            ? referrer_url
            : GURL();
@@ -206,11 +200,14 @@
 -    quarantine::mojom::Quarantine* raw_quarantine = quarantine_remote.get();
 -    raw_quarantine->QuarantineFile(
 -        target_url.path(), authority_url, referrer_url,
+-        // TODO(crbug.com/351165321): Consider propagating request_initiator
+-        // information here.
+-        /*request_initiator=*/std::nullopt,
 -        GetContentClient()
 -            ->browser()
 -            ->GetApplicationClientGUIDForQuarantineCheck(),
 -        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
--            base::BindOnce(&SafeMoveHelper::DidAnnotateFile,
+-            base::BindOnce(&FileSystemAccessSafeMoveHelper::DidAnnotateFile,
 -                           weak_factory_.GetWeakPtr(),
 -                           std::move(quarantine_remote)),
 -            quarantine::mojom::QuarantineFileResult::ANNOTATION_FAILED));
@@ -220,7 +217,7 @@
 -        FROM_HERE, {base::MayBlock()},
 -        base::BindOnce(&quarantine::SetInternetZoneIdentifierDirectly,
 -                       target_url.path(), authority_url, referrer_url),
--        base::BindOnce(&SafeMoveHelper::DidAnnotateFile,
+-        base::BindOnce(&FileSystemAccessSafeMoveHelper::DidAnnotateFile,
 -                       weak_factory_.GetWeakPtr(),
 -                       std::move(quarantine_remote)));
 -#else
@@ -230,14 +227,14 @@
 -  }
  }
  
- void SafeMoveHelper::DidAnnotateFile(
+ void FileSystemAccessSafeMoveHelper::DidAnnotateFile(
 -    mojo::Remote<quarantine::mojom::Quarantine> quarantine_remote,
      quarantine::mojom::QuarantineFileResult result) {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
  
---- a/content/browser/file_system_access/safe_move_helper.h
-+++ b/content/browser/file_system_access/safe_move_helper.h
-@@ -58,10 +58,8 @@ class CONTENT_EXPORT SafeMoveHelper {
+--- a/content/browser/file_system_access/file_system_access_safe_move_helper.h
++++ b/content/browser/file_system_access/file_system_access_safe_move_helper.h
+@@ -66,10 +66,8 @@ class CONTENT_EXPORT FileSystemAccessSaf
    void DidFileDoQuarantine(
        const storage::FileSystemURL& target_url,
        const GURL& referrer_url,
@@ -250,7 +247,7 @@
    void ComputeHashForSourceFile(HashCallback callback);
 --- a/content/browser/renderer_host/pepper/pepper_file_io_host.cc
 +++ b/content/browser/renderer_host/pepper/pepper_file_io_host.cc
-@@ -456,7 +456,7 @@ void PepperFileIOHost::OnLocalFileOpened
+@@ -462,7 +462,7 @@ void PepperFileIOHost::OnLocalFileOpened
      ppapi::host::ReplyMessageContext reply_context,
      const base::FilePath& path,
      base::File::Error error_code) {
@@ -259,7 +256,7 @@
    // Quarantining a file before its contents are available is only supported on
    // Windows and Linux.
    if (!FileOpenForWrite(open_flags_) || error_code != base::File::FILE_OK) {
-@@ -490,7 +490,7 @@ void PepperFileIOHost::OnLocalFileOpened
+@@ -496,7 +496,7 @@ void PepperFileIOHost::OnLocalFileOpened
  #endif
  }
  
@@ -270,7 +267,7 @@
      const base::FilePath& path,
 --- a/content/browser/renderer_host/pepper/pepper_file_io_host.h
 +++ b/content/browser/renderer_host/pepper/pepper_file_io_host.h
-@@ -13,7 +13,6 @@
+@@ -14,7 +14,6 @@
  #include "base/memory/raw_ptr.h"
  #include "base/memory/ref_counted.h"
  #include "base/memory/weak_ptr.h"
@@ -278,7 +275,7 @@
  #include "content/browser/renderer_host/pepper/browser_ppapi_host_impl.h"
  #include "ipc/ipc_listener.h"
  #include "ipc/ipc_platform_file.h"
-@@ -93,12 +92,6 @@ class PepperFileIOHost : public ppapi::h
+@@ -93,12 +92,6 @@ class PepperFileIOHost final : public pp
                           const base::FilePath& path,
                           base::File::Error error_code);
  

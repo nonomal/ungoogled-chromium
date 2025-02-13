@@ -2,27 +2,26 @@
 
 --- a/chrome/browser/ungoogled_flag_entries.h
 +++ b/chrome/browser/ungoogled_flag_entries.h
-@@ -52,4 +52,8 @@
+@@ -48,4 +48,8 @@
       "Close window with last tab",
-      "Determines whether a window should close once the last tab is closed.  ungoogled-chromium flag.",
+      "Determines whether a window should close once the last tab is closed. ungoogled-chromium flag.",
       kOsDesktop, MULTI_VALUE_TYPE(kCloseWindowWithLastTab)},
 +    {"popups-to-tabs",
 +     "Popups to tabs",
-+     "Makes popups open in new tabs.  ungoogled-chromium flag",
++     "Makes popups open in new tabs. ungoogled-chromium flag",
 +     kOsAll, SINGLE_VALUE_TYPE("popups-to-tabs")},
  #endif  // CHROME_BROWSER_UNGOOGLED_FLAG_ENTRIES_H_
---- a/content/renderer/render_view_impl.cc
-+++ b/content/renderer/render_view_impl.cc
-@@ -74,6 +74,9 @@ WindowOpenDisposition RenderViewImpl::Na
+--- a/content/renderer/render_frame_impl.cc
++++ b/content/renderer/render_frame_impl.cc
+@@ -1221,6 +1221,8 @@ WindowOpenDisposition NavigationPolicyTo
      case blink::kWebNavigationPolicyNewWindow:
        return WindowOpenDisposition::NEW_WINDOW;
      case blink::kWebNavigationPolicyNewPopup:
 +      if (base::CommandLine::ForCurrentProcess()->HasSwitch("popups-to-tabs"))
 +        return WindowOpenDisposition::NEW_FOREGROUND_TAB;
-+      return WindowOpenDisposition::NEW_POPUP;
-     case blink::kWebNavigationPolicyPictureInPicture:
        return WindowOpenDisposition::NEW_POPUP;
-     default:
+     case blink::kWebNavigationPolicyPictureInPicture:
+       return WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;
 --- a/ui/base/mojom/window_open_disposition_mojom_traits.h
 +++ b/ui/base/mojom/window_open_disposition_mojom_traits.h
 @@ -5,6 +5,7 @@
@@ -42,7 +41,7 @@
          return ui::mojom::WindowOpenDisposition::NEW_POPUP;
        case WindowOpenDisposition::NEW_WINDOW:
          return ui::mojom::WindowOpenDisposition::NEW_WINDOW;
-@@ -68,6 +71,8 @@ struct EnumTraits<ui::mojom::WindowOpenD
+@@ -67,6 +70,8 @@ struct EnumTraits<ui::mojom::WindowOpenD
          return true;
        case ui::mojom::WindowOpenDisposition::NEW_POPUP:
          *out = WindowOpenDisposition::NEW_POPUP;

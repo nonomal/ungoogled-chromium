@@ -22,10 +22,13 @@ from pathlib import Path, PurePosixPath
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'utils'))
 from _common import get_logger
 from domain_substitution import DomainRegexList, TREE_ENCODINGS
+from prune_binaries import CONTINGENT_PATHS
 sys.path.pop(0)
 
 # Encoding for output files
 _ENCODING = 'UTF-8'
+
+# pylint: disable=line-too-long
 
 # NOTE: Include patterns have precedence over exclude patterns
 # pathlib.Path.match() paths to include in binary pruning
@@ -41,10 +44,6 @@ PRUNING_INCLUDE_PATTERNS = [
 # pathlib.Path.match() paths to exclude from binary pruning
 PRUNING_EXCLUDE_PATTERNS = [
     'chrome/common/win/eventlog_messages.mc', # TODO: False positive textfile
-    # TabRanker example preprocessor config
-    # Details in chrome/browser/resource_coordinator/tab_ranker/README.md
-    'chrome/browser/resource_coordinator/tab_ranker/example_preprocessor_config.pb',
-    'chrome/browser/resource_coordinator/tab_ranker/pairwise_preprocessor_config.pb',
     # Exclusions for DOM distiller (contains model data only)
     'components/dom_distiller/core/data/distillable_page_model_new.bin',
     'components/dom_distiller/core/data/long_page_model.bin',
@@ -60,9 +59,12 @@ PRUNING_EXCLUDE_PATTERNS = [
     # Exclusion for Android
     'build/android/chromium-debug.keystore',
     'third_party/icu/android/icudtl.dat',
-    'third_party/icu/android_small/icudtl.dat',
-    'third_party/icu/android_small/icudtl_extra.dat',
     'third_party/icu/common/icudtb.dat',
+    # Exclusion for rollup v4.0+
+    'third_party/devtools-frontend/src/node_modules/@rollup/wasm-node/dist/wasm-node/bindings_wasm_bg.wasm',
+    'third_party/node/node_modules/@rollup/wasm-node/dist/wasm-node/bindings_wasm_bg.wasm',
+    # Exclusion for performance tracing
+    'third_party/perfetto/src/trace_processor/importers/proto/atoms.descriptor',
     # Exclusions for safe file extensions
     '*.avif',
     '*.ttf',
@@ -78,6 +80,7 @@ PRUNING_EXCLUDE_PATTERNS = [
     '*.woff',
     '*.woff2',
     '*makefile',
+    '*.profdata',
     '*.xcf',
     '*.cur',
     '*.pdf',
@@ -102,18 +105,21 @@ PRUNING_EXCLUDE_PATTERNS = [
 DOMAIN_EXCLUDE_PREFIXES = [
     'components/test/',
     'net/http/transport_security_state_static.json',
+    'net/http/transport_security_state_static_pins.json',
     # Exclusions for Visual Studio Project generation with GN (PR #445)
-    'tools/gn/src/gn/visual_studio_writer.cc',
+    'tools/gn/',
     # Exclusions for files covered with other patches/unnecessary
     'components/search_engines/prepopulated_engines.json',
     'third_party/blink/renderer/core/dom/document.cc',
 ]
 
+# pylint: enable=line-too-long
+
 # pathlib.Path.match() patterns to include in domain substitution
 DOMAIN_INCLUDE_PATTERNS = [
     '*.h', '*.hh', '*.hpp', '*.hxx', '*.cc', '*.cpp', '*.cxx', '*.c', '*.h', '*.json', '*.js',
     '*.html', '*.htm', '*.css', '*.py*', '*.grd*', '*.sql', '*.idl', '*.mk', '*.gyp*', 'makefile',
-    '*.txt', '*.xml', '*.mm', '*.jinja*', '*.gn', '*.gni'
+    '*.ts', '*.txt', '*.xml', '*.mm', '*.jinja*', '*.gn', '*.gni'
 ]
 
 # Binary-detection constant
@@ -132,17 +138,18 @@ class UnusedPatterns: #pylint: disable=too-few-public-methods
         for name in self._all_names:
             setattr(self, name, set(globals()[name.upper()]))
 
-    def log_unused(self):
+    def log_unused(self, error=True):
         """
         Logs unused patterns and prefixes
 
         Returns True if there are unused patterns or prefixes; False otherwise
         """
         have_unused = False
+        log = get_logger().error if error else get_logger().info
         for name in self._all_names:
             current_set = getattr(self, name, None)
             if current_set:
-                get_logger().error('Unused from %s: %s', name.upper(), current_set)
+                log('Unused from %s: %s', name.upper(), current_set)
                 have_unused = True
         return have_unused
 
@@ -255,27 +262,28 @@ def compute_lists_proc(path, source_tree, search_regex):
     symlink_set = set()
     if path.is_file():
         relative_path = path.relative_to(source_tree)
-        if path.is_symlink():
-            try:
-                resolved_relative_posix = path.resolve().relative_to(source_tree).as_posix()
-                symlink_set.add((resolved_relative_posix, relative_path.as_posix()))
-            except ValueError:
-                # Symlink leads out of the source tree
-                pass
-        else:
-            try:
-                if should_prune(path, relative_path, used_pep_set, used_pip_set):
-                    pruning_set.add(relative_path.as_posix())
-                elif should_domain_substitute(path, relative_path, search_regex, used_dep_set,
-                                              used_dip_set):
-                    domain_substitution_set.add(relative_path.as_posix())
-            except: #pylint: disable=bare-except
-                get_logger().exception('Unhandled exception while processing %s', relative_path)
+        if not any(str(relative_path.as_posix()).startswith(cpath) for cpath in CONTINGENT_PATHS):
+            if path.is_symlink():
+                try:
+                    resolved_relative_posix = path.resolve().relative_to(source_tree).as_posix()
+                    symlink_set.add((resolved_relative_posix, relative_path.as_posix()))
+                except ValueError:
+                    # Symlink leads out of the source tree
+                    pass
+            elif not any(skip in ('.git', '__pycache__', 'uc_staging') for skip in path.parts):
+                try:
+                    if should_prune(path, relative_path, used_pep_set, used_pip_set):
+                        pruning_set.add(relative_path.as_posix())
+                    elif should_domain_substitute(path, relative_path, search_regex, used_dep_set,
+                                                  used_dip_set):
+                        domain_substitution_set.add(relative_path.as_posix())
+                except: #pylint: disable=bare-except
+                    get_logger().exception('Unhandled exception while processing %s', relative_path)
     return (used_pep_set, used_pip_set, used_dep_set, used_dip_set, pruning_set,
             domain_substitution_set, symlink_set)
 
 
-def compute_lists(source_tree, search_regex, processes):
+def compute_lists(source_tree, search_regex, processes): # pylint: disable=too-many-locals
     """
     Compute the binary pruning and domain substitution lists of the source tree.
     Returns a tuple of three items in the following order:
@@ -302,10 +310,12 @@ def compute_lists(source_tree, search_regex, processes):
     # Handle the returned data
     for (used_pep_set, used_pip_set, used_dep_set, used_dip_set, returned_pruning_set,
          returned_domain_sub_set, returned_symlink_set) in returned_data:
+        # pragma pylint: disable=no-member
         unused_patterns.pruning_exclude_patterns.difference_update(used_pep_set)
         unused_patterns.pruning_include_patterns.difference_update(used_pip_set)
         unused_patterns.domain_exclude_prefixes.difference_update(used_dep_set)
         unused_patterns.domain_include_patterns.difference_update(used_dip_set)
+        # pragma pylint: enable=no-member
         pruning_set.update(returned_pruning_set)
         domain_substitution_set.update(returned_domain_sub_set)
         symlink_set.update(returned_symlink_set)
@@ -321,31 +331,27 @@ def compute_lists(source_tree, search_regex, processes):
 def main(args_list=None):
     """CLI entrypoint"""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        '--pruning',
-        metavar='PATH',
-        type=Path,
-        default='pruning.list',
-        help='The path to store pruning.list. Default: %(default)s')
-    parser.add_argument(
-        '--domain-substitution',
-        metavar='PATH',
-        type=Path,
-        default='domain_substitution.list',
-        help='The path to store domain_substitution.list. Default: %(default)s')
-    parser.add_argument(
-        '--domain-regex',
-        metavar='PATH',
-        type=Path,
-        default='domain_regex.list',
-        help='The path to domain_regex.list. Default: %(default)s')
-    parser.add_argument(
-        '-t',
-        '--tree',
-        metavar='PATH',
-        type=Path,
-        required=True,
-        help='The path to the source tree to use.')
+    parser.add_argument('--pruning',
+                        metavar='PATH',
+                        type=Path,
+                        default='pruning.list',
+                        help='The path to store pruning.list. Default: %(default)s')
+    parser.add_argument('--domain-substitution',
+                        metavar='PATH',
+                        type=Path,
+                        default='domain_substitution.list',
+                        help='The path to store domain_substitution.list. Default: %(default)s')
+    parser.add_argument('--domain-regex',
+                        metavar='PATH',
+                        type=Path,
+                        default='domain_regex.list',
+                        help='The path to domain_regex.list. Default: %(default)s')
+    parser.add_argument('-t',
+                        '--tree',
+                        metavar='PATH',
+                        type=Path,
+                        required=True,
+                        help='The path to the source tree to use.')
     parser.add_argument(
         '--processes',
         metavar='NUM',
@@ -353,12 +359,23 @@ def main(args_list=None):
         default=None,
         help=
         'The maximum number of worker processes to create. Defaults to the number of system CPUs.')
+    parser.add_argument('--domain-exclude-prefix',
+                        metavar='PREFIX',
+                        type=str,
+                        action='append',
+                        help='Additional exclusion for domain_substitution.list.')
+    parser.add_argument('--no-error-unused',
+                        action='store_false',
+                        dest='error_unused',
+                        help='Do not treat unused patterns/prefixes as an error.')
     args = parser.parse_args(args_list)
+    if args.domain_exclude_prefix is not None:
+        DOMAIN_EXCLUDE_PREFIXES.extend(args.domain_exclude_prefix)
     if args.tree.exists() and not _dir_empty(args.tree):
         get_logger().info('Using existing source tree at %s', args.tree)
     else:
         get_logger().error('No source tree found. Aborting.')
-        exit(1)
+        sys.exit(1)
     get_logger().info('Computing lists...')
     pruning_set, domain_substitution_set, unused_patterns = compute_lists(
         args.tree,
@@ -367,10 +384,10 @@ def main(args_list=None):
         file_obj.writelines('%s\n' % line for line in pruning_set)
     with args.domain_substitution.open('w', encoding=_ENCODING) as file_obj:
         file_obj.writelines('%s\n' % line for line in domain_substitution_set)
-    if unused_patterns.log_unused():
+    if unused_patterns.log_unused(args.error_unused) and args.error_unused:
         get_logger().error('Please update or remove unused patterns and/or prefixes. '
                            'The lists have still been updated with the remaining valid entries.')
-        exit(1)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

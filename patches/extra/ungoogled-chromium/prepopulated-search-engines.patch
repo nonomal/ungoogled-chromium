@@ -1,31 +1,24 @@
-## template_url_prepopulate_data.cc
-# Appends search engines to the returned list of prepopulated search engines.
-# Only add DDG if it hasn't already been included.
+# Disables Site search Starter Pack
+# Adds DDG to the default search engines.
 #
-## util.cc
-# Only snyc the prepoulated search engines when initializing the database.
-# Prevents search engines from being overridden in future updates.
-#
---- a/components/search_engines/template_url_prepopulate_data.cc
-+++ b/components/search_engines/template_url_prepopulate_data.cc
-@@ -1331,6 +1331,9 @@ std::vector<std::unique_ptr<TemplateURLD
-   std::vector<std::unique_ptr<TemplateURLData>> t_urls;
-   for (size_t i = 0; i < num_engines; ++i)
-     t_urls.push_back(TemplateURLDataFromPrepopulatedEngine(*engines[i]));
-+  if (std::find(engines, engines + num_engines, &duckduckgo) == engines + num_engines) {
-+    t_urls.push_back(TemplateURLDataFromPrepopulatedEngine(duckduckgo));
-+  }
-   return t_urls;
- }
+--- a/components/omnibox/common/omnibox_features.cc
++++ b/components/omnibox/common/omnibox_features.cc
+@@ -326,7 +326,7 @@ BASE_FEATURE(kOmniboxTouchDownTriggerFor
+ // Enables additional site search providers for the Site search Starter Pack.
+ BASE_FEATURE(kStarterPackExpansion,
+              "StarterPackExpansion",
+-             enable_if(!IS_ANDROID && !IS_IOS));
++             base::FEATURE_DISABLED_BY_DEFAULT);
  
---- a/components/search_engines/util.cc
-+++ b/components/search_engines/util.cc
-@@ -396,7 +396,7 @@ void GetSearchProvidersUsingLoadedEngine
+ // Enables an informational IPH message at the bottom of the Omnibox directing
+ // users to certain starter pack engines.
+--- a/components/search_engines/search_engine_countries-inc.cc
++++ b/components/search_engines/search_engine_countries-inc.cc
+@@ -41,6 +41,7 @@ constexpr EngineAndTier engines_default[
+     {SearchEngineTier::kTopEngines, &google},
+     {SearchEngineTier::kTopEngines, &bing},
+     {SearchEngineTier::kTopEngines, &yahoo},
++    {SearchEngineTier::kTopEngines, &duckduckgo},
+ };
  
-   const int prepopulate_resource_keyword_version =
-       TemplateURLPrepopulateData::GetDataVersion(prefs);
--  if (*resource_keyword_version < prepopulate_resource_keyword_version) {
-+  if (*resource_keyword_version == 0) {
-     MergeEnginesFromPrepopulateData(service, &prepopulated_urls, template_urls,
-                                     default_search_provider,
-                                     removed_keyword_guids);
+ // Note, the below entries are sorted by country code, not the name in comment.
